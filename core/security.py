@@ -9,9 +9,7 @@ from passlib.context import CryptContext
 
 from core.settings import settings
 
-# ---------------------------------------------------------------------------
-# Password hashing
-# ---------------------------------------------------------------------------
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -23,9 +21,6 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
-# ---------------------------------------------------------------------------
-# JWT helpers
-# ---------------------------------------------------------------------------
 def create_access_token(subject: str, expires_delta: Optional[timedelta] = None) -> str:
     """Create a signed JWT. `subject` is typically the user's UUID as a string."""
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
@@ -46,9 +41,7 @@ def decode_access_token(token: str) -> dict:
         )
 
 
-# ---------------------------------------------------------------------------
-# HTTPBearer dependency
-# ---------------------------------------------------------------------------
+
 _bearer_scheme = HTTPBearer()
 
 

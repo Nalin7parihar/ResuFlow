@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.v1.router import api_router
 from core.settings import settings
 from db.database import init_db
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialisation — create tables if they don't exist yet
