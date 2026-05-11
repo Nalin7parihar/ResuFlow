@@ -1,28 +1,33 @@
 """
 services/resume_service.py
 --------------------------
-Handles resume upload, parsing, keyword extraction, and DB persistence.
-All work is done synchronously, inline.
+HTTP-facing resume service (producer side).
 
-# TODO: Replace the parsing block with a Kafka producer message once the
-#       worker infrastructure is in place. The extraction helpers below
-#       can be moved as-is into the consumer worker.
+upload_and_parse_resume now follows the Kafka pattern:
+  1. Validate + save file to disk
+  2. INSERT Task (status=queued)
+  3. Publish a message to the `resume-processing` Kafka topic
+  4. Return 202 Accepted (task_id only)
+
+The actual parsing is handled asynchronously by the Kafka consumer worker
+(kafka/worker.py).  The extraction helpers have been moved to
+services/resume_parser.py so the worker can import them without pulling in
+FastAPI/HTTP dependencies.
 """
 
 from __future__ import annotations
 
-import io
-import re
 import uuid
 from pathlib import Path
-from typing import List
 from uuid import UUID
 
 import aiofiles
-from fastapi import HTTPException, UploadFile, status
+from fastapi import Depends, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mq.config import ResumeJobMessage
+from mq.producer import KafkaProducerClient, get_kafka_producer
 from model.resume_result import ResumeResult
 from model.task import Task
 from schema.resume_result import ResumeResultResponse
@@ -35,115 +40,6 @@ from schema.task import TaskResponse
 UPLOADS_DIR = Path("uploads")
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
-# Curated skills keyword list (extend freely)
-_SKILLS_VOCAB: List[str] = [
-    "python", "java", "javascript", "typescript", "golang", "rust", "c++", "c#",
-    "ruby", "kotlin", "swift", "scala", "r", "matlab",
-    "fastapi", "django", "flask", "spring", "react", "angular", "vue", "node",
-    "express", "nextjs", "nestjs",
-    "sql", "postgresql", "mysql", "sqlite", "mongodb", "redis", "elasticsearch",
-    "kafka", "rabbitmq", "celery",
-    "docker", "kubernetes", "terraform", "ansible", "jenkins", "github actions",
-    "aws", "gcp", "azure",
-    "git", "linux", "bash", "rest", "graphql", "grpc",
-    "machine learning", "deep learning", "nlp", "computer vision",
-    "pandas", "numpy", "scikit-learn", "tensorflow", "pytorch",
-    "html", "css", "tailwind", "sass",
-    "agile", "scrum", "ci/cd", "tdd", "microservices",
-]
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _extract_text_from_pdf(content: bytes) -> str:
-    """Extract plain text from PDF bytes using PyMuPDF."""
-    try:
-        import fitz  # PyMuPDF
-
-        doc = fitz.open(stream=content, filetype="pdf")
-        return "\n".join(page.get_text() for page in doc)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse PDF: {exc}",
-        )
-
-
-def _extract_text_from_docx(content: bytes) -> str:
-    """Extract plain text from DOCX bytes using python-docx."""
-    try:
-        from docx import Document
-
-        doc = Document(io.BytesIO(content))
-        return "\n".join(para.text for para in doc.paragraphs)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse DOCX: {exc}",
-        )
-
-
-def _extract_raw_text(content: bytes, extension: str) -> str:
-    """Dispatch to the correct parser based on file extension."""
-    if extension == ".pdf":
-        return _extract_text_from_pdf(content)
-    if extension == ".docx":
-        return _extract_text_from_docx(content)
-    # Plain text fallback
-    return content.decode("utf-8", errors="replace")
-
-
-def _extract_email(text: str) -> str | None:
-    match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
-    return match.group(0) if match else None
-
-
-def _extract_phone(text: str) -> str | None:
-    match = re.search(
-        r"(\+?\d[\d\s\-().]{7,}\d)",
-        text,
-    )
-    return match.group(0).strip() if match else None
-
-
-def _extract_name(text: str) -> str | None:
-    """
-    Heuristic: the candidate's name is usually the first non-empty,
-    non-email, non-phone line of the resume.
-    """
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if "@" in line or re.search(r"\d{5,}", line):
-            continue
-        # Likely a name if it's short and has only alpha + spaces
-        if re.fullmatch(r"[A-Za-z]+(?: [A-Za-z]+){0,4}", line):
-            return line
-    return None
-
-
-def _extract_experience_years(text: str) -> int | None:
-    """
-    Match patterns like:
-      '5+ years', '3 years of experience', 'over 10 years', '2-year experience'
-    Returns the first matched integer.
-    """
-    pattern = re.compile(
-        r"(\d+)\+?\s*(?:-\s*\d+\s*)?years?(?:\s+of(?:\s+relevant)?\s+experience)?",
-        re.IGNORECASE,
-    )
-    match = pattern.search(text)
-    return int(match.group(1)) if match else None
-
-
-def _extract_skills(text: str) -> List[str]:
-    """Return every skill from _SKILLS_VOCAB found in the resume text (case-insensitive)."""
-    lower_text = text.lower()
-    return [skill for skill in _SKILLS_VOCAB if skill in lower_text]
-
 
 # ---------------------------------------------------------------------------
 # Public service functions
@@ -154,21 +50,17 @@ async def upload_and_parse_resume(
     user_id: UUID,
     file: UploadFile,
     db: AsyncSession,
-) -> ResumeResultResponse:
+    producer: KafkaProducerClient,
+) -> TaskResponse:
     """
-    Single synchronous entry-point for the resume pipeline:
+    Producer-side pipeline:
       1. Validate file extension
       2. Save file to disk
       3. INSERT Task (status=queued)
-      4. UPDATE Task (status=processing)
-      5. Extract raw text (PDF / DOCX / TXT)
-      6. Run regex-based keyword extraction
-      7. INSERT ResumeResult
-      8. UPDATE Task (status=completed)
-      9. Return ResumeResultResponse
+      4. Publish ResumeJobMessage to Kafka → consumer worker takes it from here
+      5. Return 202 Accepted with the task_id so the client can poll for status
 
-    On any failure after step 3, the task is marked 'failed' with an
-    error_message before re-raising.
+    The consumer (kafka/worker.py) handles parsing and DB result insertion.
     """
     # --- 1. Validate extension ---
     filename = file.filename or "upload"
@@ -201,55 +93,28 @@ async def upload_and_parse_resume(
     await db.commit()
     await db.refresh(task)
 
-    # --- 4-8: Parse + store (wrapped so failures update task status) ---
+    # --- 4. Publish to Kafka ---
     try:
-        # 4. Mark processing
-        task.status = "processing"
-        await db.commit()
-
-        # 5. Extract raw text
-        raw_text = _extract_raw_text(content, extension)
-
-        # 6. Keyword extraction
-        name = _extract_name(raw_text)
-        email = _extract_email(raw_text)
-        phone = _extract_phone(raw_text)
-        skills = _extract_skills(raw_text)
-        experience_years = _extract_experience_years(raw_text)
-
-        # 7. INSERT ResumeResult
-        result = ResumeResult(
-            task_id=task.id,
-            name=name,
-            email=email,
-            phone=phone,
-            skills=skills or None,
-            experience_years=experience_years,
-            raw_text=raw_text,
+        msg = ResumeJobMessage(
+            task_id=str(task.id),
+            user_id=str(user_id),
+            file_path=str(file_path),
+            file_extension=extension,
         )
-        db.add(result)
-
-        # 8. Mark completed
-        task.status = "completed"
-        await db.commit()
-        await db.refresh(result)
-
-    except HTTPException:
-        task.status = "failed"
-        task.error_message = "File parsing failed — unsupported or corrupt file."
-        await db.commit()
-        raise
+        await producer.publish_resume_job(msg)
     except Exception as exc:
+        # If Kafka publish fails we mark the task failed — the file is already
+        # on disk so the operator can replay manually if needed.
         task.status = "failed"
-        task.error_message = str(exc)
+        task.error_message = f"Kafka publish failed: {exc}"
         await db.commit()
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Resume processing failed: {exc}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to queue resume job: {exc}",
         )
 
-    # 9. Return response
-    return ResumeResultResponse.model_validate(result)
+    # --- 5. Return accepted response ---
+    return TaskResponse.model_validate(task)
 
 
 async def list_user_tasks(user_id: UUID, db: AsyncSession) -> list[TaskResponse]:

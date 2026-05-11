@@ -6,13 +6,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.v1.router import api_router
 from core.settings import settings
 from db.database import init_db
+from mq.producer import kafka_producer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialisation — create tables if they don't exist yet
+    # Initialise DB tables
     await init_db()
+    # Start Kafka producer (single shared connection for all requests)
+    await kafka_producer.start()
     yield
-    # Cleanup (nothing needed for now)
+    # Graceful shutdown — flush pending messages before closing
+    await kafka_producer.stop()
 
 
 app = FastAPI(

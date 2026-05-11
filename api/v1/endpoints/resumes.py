@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import get_current_user_id
 from db.database import get_db
+from mq.producer import KafkaProducerClient, get_kafka_producer
 from schema.resume_result import ResumeResultResponse
 from schema.task import TaskResponse
 from services import resume_service
@@ -14,26 +15,29 @@ router = APIRouter(prefix="/resumes", tags=["Resumes"])
 
 @router.post(
     "/upload",
-    response_model=ResumeResultResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload and parse a resume",
+    response_model=TaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload a resume — queues an async parse job",
 )
 async def upload_resume(
     file: UploadFile = File(..., description="Resume file (.pdf, .docx, or .txt)"),
     current_user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-) -> ResumeResultResponse:
+    producer: KafkaProducerClient = Depends(get_kafka_producer),
+) -> TaskResponse:
     """
     Upload a resume file.
 
-    The endpoint synchronously:
+    The endpoint:
     1. Saves the file to disk
-    2. Creates a Task record
-    3. Parses the file and extracts keywords (name, email, phone, skills, experience)
-    4. Stores a ResumeResult record
-    5. Returns the extracted data
+    2. Creates a Task record (status=queued)
+    3. Publishes a parse job to Kafka
+    4. Returns 202 Accepted with the task_id
+
+    Poll `GET /resumes/tasks/{task_id}` for status updates.
+    Once `status=completed`, fetch results from `GET /resumes/tasks/{task_id}/result`.
     """
-    return await resume_service.upload_and_parse_resume(current_user_id, file, db)
+    return await resume_service.upload_and_parse_resume(current_user_id, file, db, producer)
 
 
 @router.get(
