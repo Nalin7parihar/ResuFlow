@@ -75,10 +75,16 @@ class KafkaProducerClient:
         Partition key = task_id (UUID string encoded as UTF-8 bytes).
         This gives uniform distribution because UUIDs are random.
         """
+        await self._publish(Topics.RESUME_PROCESSING.name, msg)
+
+    async def publish_dead_letter_job(self, msg: ResumeJobMessage) -> None:
+        """Publish a terminally failed resume job to the DLQ topic."""
+        await self._publish(Topics.RESUME_PROCESSING_DLQ.name, msg)
+
+    async def _publish(self, topic: str, msg: ResumeJobMessage) -> None:
         if self._producer is None:
             raise RuntimeError("KafkaProducerClient is not started. Call start() first.")
 
-        topic = Topics.RESUME_PROCESSING.name
         key = msg.task_id.encode("utf-8")
         value = json.dumps(asdict(msg)).encode("utf-8")
 
@@ -88,11 +94,12 @@ class KafkaProducerClient:
             value=value,
         )
         logger.debug(
-            "Published resume job | topic=%s partition=%d offset=%d task_id=%s",
+            "Published Kafka message | topic=%s partition=%d offset=%d task_id=%s retry_count=%d",
             record_metadata.topic,
             record_metadata.partition,
             record_metadata.offset,
             msg.task_id,
+            msg.retry_count,
         )
 
 

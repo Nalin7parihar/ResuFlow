@@ -14,6 +14,17 @@ class Settings(BaseSettings):
     # Kafka
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
     KAFKA_GROUP_ID: str = "resuflow-workers"
+    RESUME_MAX_RETRIES: int = 3
+
+    # LLM (Google Gemini)
+    GOOGLE_API_KEY: str
+    LLM_MODEL: str = "gemini-3.5-flash"
+    LLM_TEMPERATURE: float = 0.0
+    HF_TOKEN : str
+
+    # Embeddings (local sentence-transformers)
+    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+    EMBEDDING_DIMENSIONS: int = 384
 
     model_config = SettingsConfigDict(env_file=".env")
 

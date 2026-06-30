@@ -159,6 +159,8 @@ class KafkaConsumerClient:
                 user_id=payload["user_id"],
                 file_path=payload["file_path"],
                 file_extension=payload["file_extension"],
+                retry_count=payload.get("retry_count", 0),
+                error_message=payload.get("error_message"),
             )
         except Exception as exc:
             logger.error(

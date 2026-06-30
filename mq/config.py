@@ -42,8 +42,14 @@ class Topics:
         replication_factor=1,  # bump to 3 in prod
     )
 
+    RESUME_PROCESSING_DLQ = TopicConfig(
+        name="resume-processing-dlq",
+        partitions=1,
+        replication_factor=1,
+    )
+
     # Convenience list for the admin script.
-    ALL: list[TopicConfig] = [RESUME_PROCESSING]
+    ALL: list[TopicConfig] = [RESUME_PROCESSING, RESUME_PROCESSING_DLQ]
 
 
 # ---------------------------------------------------------------------------
@@ -57,3 +63,5 @@ class ResumeJobMessage:
     user_id: str       # UUID string
     file_path: str     # absolute or relative path to the saved upload
     file_extension: str  # e.g. ".pdf", ".docx", ".txt"
+    retry_count: int = 0
+    error_message: str | None = None

@@ -100,6 +100,7 @@ async def upload_and_parse_resume(
             user_id=str(user_id),
             file_path=str(file_path),
             file_extension=extension,
+            retry_count=task.retry_count or 0,
         )
         await producer.publish_resume_job(msg)
     except Exception as exc:
