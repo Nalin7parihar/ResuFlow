@@ -1,16 +1,27 @@
 # ResuFlow
 
-ResuFlow is an asynchronous resume processing pipeline built with FastAPI, PostgreSQL, and Kafka. The API accepts uploaded resumes, records a processing task, publishes a Kafka job, and returns immediately. A separate worker consumes the job, retries failed work up to a configurable limit, and routes exhausted jobs to a dead-letter queue after incrementing the task retry counter.
+ResuFlow is an AI-powered resume processing platform built as a full-stack monorepo. The backend handles asynchronous resume parsing, vector embedding, and RAG-based analysis through a FastAPI + Kafka + PostgreSQL pipeline. The frontend (React + TypeScript + Tailwind CSS) provides the user interface.
 
-## What’s Included
+## Monorepo Layout
 
-- FastAPI REST API with JWT authentication
-- PostgreSQL-backed users, tasks, and parsed resume results
-- Kafka producer, consumer, standalone worker process, and DLQ topic
-- Resume parsing for `.pdf`, `.docx`, and `.txt` uploads
-- Local Kafka stack with Docker Compose
+```
+ResuFlow/
+├── backend/          Python — FastAPI, Kafka worker, AI pipeline
+├── frontend/         React + Vite + TypeScript + Tailwind CSS
+├── docs/             Project-wide documentation
+└── docker-compose.yml   Shared infrastructure (Kafka, Kafka UI)
+```
 
-## Project Docs
+## Key Features
+
+- **JWT Authentication** — Registration, login, and token-protected routes
+- **Async Resume Processing** — Upload → Kafka queue → Worker pipeline
+- **LLM Resume Parsing** — Gemini-powered structured extraction with regex fallback
+- **Vector Embeddings** — sentence-transformers MiniLM stored in pgvector
+- **RAG Analysis** — Retrieve resume from pgvector → Gemini generates score, feedback, suggestions, and ATS tips
+- **Dead-Letter Queue** — Failed jobs retry up to a configurable limit, then route to DLQ
+
+## Project Documentation
 
 - [Documentation Index](docs/README.md)
 - [Architecture](docs/architecture.md)
@@ -21,20 +32,45 @@ ResuFlow is an asynchronous resume processing pipeline built with FastAPI, Postg
 
 ## Quick Start
 
-1. Create a `.env` file with `DB_URL`, `SECRET_KEY`, `ALGORITHM`, and optionally `RESUME_MAX_RETRIES`, plus any Kafka overrides you need.
-2. Start Kafka with `docker-compose up -d`.
-3. Create the Kafka topic with `python -m mq.topics`.
-4. Start the API with `python main.py` or `uvicorn main:app --reload`.
-5. Start the worker with `python -m mq.worker`.
+### Prerequisites
+
+- Python 3.13+ and [uv](https://github.com/astral-sh/uv)
+- Node.js 22+ and npm
+- Docker (for Kafka)
+- PostgreSQL with pgvector extension
+
+### Backend
+
+```bash
+cd backend
+cp .env.example .env   # fill in DB_URL, SECRET_KEY, GOOGLE_API_KEY, etc.
+uv sync                # install dependencies + create .venv
+./start_server.sh      # start FastAPI (provisions Kafka topics automatically)
+./start_worker.sh      # start Kafka worker (in a second terminal)
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev            # Vite dev server at http://localhost:5173
+```
+
+### Infrastructure
+
+```bash
+docker-compose up -d   # Kafka + Kafka UI (from project root)
+```
 
 ## Request Flow
 
-1. A client registers or logs in and receives a JWT access token.
-2. The client uploads a resume to `POST /api/v1/resumes/upload`.
-3. The API stores the file under `uploads/<user_id>/`, creates a queued task, and publishes a Kafka message.
-4. The worker reads the file, extracts candidate fields, stores the parsed result, and marks the task completed.
-5. If a parse or file-read step fails, the worker increments `retry_count`, republishes the job until the retry limit is reached, and then sends the job to `resume-processing-dlq`.
-6. The client polls task status and fetches the parsed result when the task is complete.
+1. Client registers or logs in → receives JWT access token.
+2. Client uploads resume → API saves file, creates task, publishes Kafka message.
+3. Worker consumes message → LLM parses resume → stores embedding in pgvector → RAG analysis via Gemini.
+4. Worker saves `ResumeResult` (parsed data + analysis) and marks task `completed`.
+5. If processing fails → retry up to `RESUME_MAX_RETRIES`, then route to DLQ.
+6. Client polls task status and fetches the full result when complete.
 
 ## License
 

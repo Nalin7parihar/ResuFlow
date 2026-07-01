@@ -1,6 +1,6 @@
 # Documentation Index
 
-This directory contains the project documentation generated from the current codebase scan.
+Project documentation for the ResuFlow monorepo.
 
 ## Read First
 
@@ -12,19 +12,41 @@ This directory contains the project documentation generated from the current cod
 
 ## Scope
 
-The docs reflect the implementation in this repository at scan time:
+The docs cover the full-stack implementation:
+
+### Backend (`backend/`)
 
 - FastAPI application entrypoint in `main.py`
 - API routes in `api/v1/endpoints/`
 - SQLAlchemy models in `model/`
-- Schemas in `schema/`
-- Services in `services/`
-- Kafka producer, consumer, worker, and topic administration in `mq/`
-- Database setup in `db/database.py`
-- Runtime configuration in `core/settings.py`
+- Pydantic schemas in `schema/`
+- Service layer in `services/`:
+  - `auth_service.py` — registration and login
+  - `user_service.py` — user CRUD
+  - `resume_service.py` — upload orchestration and task lookups
+  - `resume_parser.py` — raw text extraction (PDF, DOCX, TXT) and regex field extraction
+  - `llm_parser.py` — Gemini-powered structured resume extraction (LangChain)
+  - `embedding_service.py` — sentence-transformers embeddings stored in pgvector
+  - `resume_analyzer.py` — RAG analysis pipeline (retrieve → Gemini → score/feedback)
+- Kafka pipeline in `mq/` — producer, consumer, worker, topic admin, DLQ
+- Database in `db/database.py` — async SQLAlchemy engine and session
+- Configuration in `core/settings.py` — Pydantic settings from `.env`
+
+### Frontend (`frontend/`)
+
+- React + Vite + TypeScript + Tailwind CSS
+- Development proxy to backend API at `localhost:8000`
+
+### Infrastructure
+
+- `docker-compose.yml` (root) — Kafka (KRaft mode) + Kafka UI
+- `backend/Dockerfile` — production container for FastAPI
+- `frontend/Dockerfile` — multi-stage build with Nginx
 
 ## Notes
 
-- The current code uses PostgreSQL and Kafka, including a `resume-processing-dlq` topic for exhausted jobs.
-- Database tables are created on application startup through `init_db()`.
-- The worker is a separate process and should be run independently from the web API.
+- PostgreSQL with pgvector extension is required for both relational data and vector search.
+- Kafka (KRaft mode, no ZooKeeper) handles async job processing.
+- The worker is a separate process and must be run independently from the web API.
+- Database tables are created on application startup via `init_db()`.
+- The `resume_embeddings` pgvector table is auto-provisioned by langchain-postgres on first use.

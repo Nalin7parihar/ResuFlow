@@ -1,6 +1,27 @@
 # API Reference
 
+Base URL: `http://localhost:8000`
+
 All protected routes expect `Authorization: Bearer <token>`.
+
+---
+
+## Health
+
+### `GET /`
+
+Returns service health status.
+
+Response: `200 OK`
+
+```json
+{
+  "status": "ok",
+  "service": "ResuFlow"
+}
+```
+
+---
 
 ## Auth
 
@@ -17,7 +38,7 @@ Request body:
 }
 ```
 
-Response: `201 Created` with a `UserResponse` body.
+Response: `201 Created` with `UserResponse`.
 
 ### `POST /api/v1/auth/login`
 
@@ -36,16 +57,18 @@ Response: `200 OK` with `TokenResponse`:
 
 ```json
 {
-  "access_token": "...",
+  "access_token": "eyJhbGciOi...",
   "token_type": "bearer"
 }
 ```
+
+---
 
 ## Users
 
 ### `POST /api/v1/users/`
 
-Creates a user record. This is described in the code as an admin or internal-use endpoint.
+Creates a user record (admin/internal-use endpoint).
 
 ### `GET /api/v1/users/me`
 
@@ -67,21 +90,31 @@ Updates a user email and/or password.
 
 Deletes a user by ID and returns `204 No Content`.
 
+---
+
 ## Resumes
 
 ### `POST /api/v1/resumes/upload`
 
-Uploads a resume file and queues an asynchronous parsing job.
+Uploads a resume file and queues an asynchronous processing job.
 
-Accepted file types:
+Accepted file types: `.pdf`, `.docx`, `.txt`
 
-- `.pdf`
-- `.docx`
-- `.txt`
+Response: `202 Accepted` with `TaskResponse`:
 
-Response: `202 Accepted` with a `TaskResponse` body.
-
-The returned task includes `retry_count`, which starts at `0` and increases each time the worker retries the job.
+```json
+{
+  "id": "uuid",
+  "user_id": "uuid",
+  "task_type": "resume_processing",
+  "status": "queued",
+  "file_url": "uploads/<user_id>/<filename>",
+  "retry_count": 0,
+  "error_message": null,
+  "created_at": "2026-07-01T12:00:00",
+  "updated_at": "2026-07-01T12:00:00"
+}
+```
 
 ### `GET /api/v1/resumes/tasks`
 
@@ -93,7 +126,53 @@ Returns a single task if it belongs to the authenticated user.
 
 ### `GET /api/v1/resumes/tasks/{task_id}/result`
 
-Returns the parsed resume result for a completed task.
+Returns the full parsed resume result including RAG analysis for a completed task.
+
+Response: `200 OK` with `ResumeResultResponse`:
+
+```json
+{
+  "id": "uuid",
+  "task_id": "uuid",
+  "name": "John Doe",
+  "email": "john@example.com",
+  "phone": "+1-555-0123",
+  "skills": ["Python", "FastAPI", "PostgreSQL"],
+  "experience_years": 5,
+  "raw_text": "Full extracted resume text...",
+  "summary": "Experienced backend engineer...",
+  "education": ["B.Tech in CS — IIT Delhi (2020)"],
+  "work_experience": [
+    {
+      "company": "Acme Corp",
+      "title": "Senior Engineer",
+      "duration": "Jan 2022 – Present",
+      "highlights": ["Led team of 5", "Reduced latency by 40%"]
+    }
+  ],
+  "overall_score": 72,
+  "summary_verdict": "Solid technical resume with quantified achievements...",
+  "section_feedback": [
+    {
+      "section": "Work Experience",
+      "score": 80,
+      "strengths": ["Quantified achievements", "Strong action verbs"],
+      "weaknesses": ["Missing context for some roles"]
+    }
+  ],
+  "suggestions": [
+    "Add a professional summary section",
+    "Quantify impact in bullet points",
+    "Include links to portfolio or GitHub"
+  ],
+  "ats_tips": [
+    "Use standard section headings",
+    "Avoid tables and multi-column layouts"
+  ],
+  "keywords_missing": ["Docker", "Kubernetes", "CI/CD"],
+  "created_at": "2026-07-01T12:00:05"
+}
+```
 
 Behavior:
 
@@ -101,16 +180,29 @@ Behavior:
 - `403 Forbidden` if the task belongs to another user
 - `404 Not Found` if no result record exists
 
+---
+
+## Worker Processing Pipeline
+
+When the worker consumes a resume job from Kafka, it executes this pipeline:
+
+1. **Parse** — Gemini structured extraction (name, email, phone, skills, experience, summary, education, work history). Falls back to regex if LLM fails.
+2. **Save** — Insert `ResumeResult` row with parsed data.
+3. **Embed** — Generate 384-dim MiniLM embedding, store in pgvector (non-critical, continues on failure).
+4. **Analyse** — RAG pipeline: retrieve from pgvector → Gemini generates overall score, section feedback, suggestions, ATS tips, missing keywords (non-critical, continues on failure).
+5. **Update** — Enrich `ResumeResult` row with analysis fields, mark task `completed`.
+
 ## Retry and DLQ Behavior
 
 - Failed worker attempts increment `tasks.retry_count`.
 - The worker republishes the job to `resume-processing` until `RESUME_MAX_RETRIES` is exceeded.
 - Once the retry limit is exceeded, the job is published to `resume-processing-dlq` and the task is marked `failed`.
+- Embedding and analysis failures are **non-critical** — the parsed result is still saved and the task completes.
 
 ## Error Patterns
 
-- `401 Unauthorized` for missing or invalid bearer tokens
-- `403 Forbidden` for ownership checks
-- `404 Not Found` for missing users or tasks
-- `409 Conflict` for duplicate users or premature result access
-- `400 Bad Request` for unsupported upload file types
+- `401 Unauthorized` — missing or invalid bearer tokens
+- `403 Forbidden` — ownership checks
+- `404 Not Found` — missing users or tasks
+- `409 Conflict` — duplicate users or premature result access
+- `400 Bad Request` — unsupported upload file types
