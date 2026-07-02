@@ -44,7 +44,6 @@ def _get_embeddings() -> HuggingFaceEmbeddings:
             model_name=settings.EMBEDDING_MODEL,
             model_kwargs={"device": "cpu"},
             encode_kwargs={"normalize_embeddings": True},
-            huggingfacehub_api_token=settings.HF_TOKEN
         )
         logger.info("Loaded embedding model: %s", settings.EMBEDDING_MODEL)
     return _embeddings
@@ -55,12 +54,16 @@ async def _get_pg_engine() -> PGEngine:
     global _pg_engine
     if _pg_engine is None:
         _pg_engine = PGEngine.from_connection_string(url=settings.DB_URL)
-        # Create the vector table if it doesn't exist
-        await _pg_engine.ainit_vectorstore_table(
-            table_name=VECTOR_TABLE_NAME,
-            vector_size=settings.EMBEDDING_DIMENSIONS,
-            metadata_columns=[],  # metadata stored as JSONB by default
-        )
+        import sqlalchemy.exc
+        try:
+            await _pg_engine.ainit_vectorstore_table(
+                table_name=VECTOR_TABLE_NAME,
+                vector_size=settings.EMBEDDING_DIMENSIONS,
+                metadata_columns=[],  # metadata stored as JSONB by default
+            )
+        except sqlalchemy.exc.ProgrammingError as e:
+            if "already exists" not in str(e):
+                raise
         logger.info(
             "PGEngine initialised — table=%s vector_size=%d",
             VECTOR_TABLE_NAME,

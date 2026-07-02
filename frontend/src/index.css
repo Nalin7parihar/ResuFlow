@@ -48,6 +48,7 @@
   --animate-pulse-soft: pulse-soft 3s ease-in-out infinite;
   --animate-shimmer: shimmer 2s ease-in-out infinite;
   --animate-slide-left: slide-left 0.3s ease-out;
+  --animate-toast-progress: toast-progress 5s linear forwards;
 }
 
 /* ── Keyframes ──────────────────────────────────────── */
@@ -89,6 +90,11 @@
 @keyframes slide-left {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }
+}
+
+@keyframes toast-progress {
+  from { width: 100%; }
+  to { width: 0%; }
 }
 
 /* ── Base Styles ────────────────────────────────────── */

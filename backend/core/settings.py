@@ -20,8 +20,6 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str
     LLM_MODEL: str = "gemini-3.5-flash"
     LLM_TEMPERATURE: float = 0.0
-    HF_TOKEN : str
-
     # Embeddings (local sentence-transformers)
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBEDDING_DIMENSIONS: int = 384

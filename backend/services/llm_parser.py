@@ -122,7 +122,8 @@ async def parse_resume_with_llm(content: bytes, extension: str) -> dict:
             SystemMessage(content=_SYSTEM_PROMPT),
             HumanMessage(content=raw_text),
         ]
-        parsed: ParsedResume = await chain.ainvoke(messages)
+        import asyncio
+        parsed: ParsedResume = await asyncio.to_thread(chain.invoke, messages)
 
         result = parsed.model_dump()
         result["raw_text"] = raw_text

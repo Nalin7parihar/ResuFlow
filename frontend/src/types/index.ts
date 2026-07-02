@@ -60,3 +60,34 @@ export interface AuthContextType {
   signup: (email: string, password: string) => Promise<void>;
   logout: () => void;
 }
+
+export interface ResumeContextType {
+  tasks: Task[];
+  results: Record<string, ResumeResult>;
+  isUploading: boolean;
+  isLoadingTasks: boolean;
+  fetchTasks: () => Promise<void>;
+  uploadResume: (file: File) => Promise<Task>;
+  fetchResult: (taskId: string) => Promise<ResumeResult>;
+  deleteTask: (taskId: string) => void;
+}
+
+export interface ToastMessage {
+  id: string;
+  type: 'success' | 'error' | 'info';
+  title: string;
+  message?: string;
+}
+
+/** Pipeline stages for real-time visualization */
+export type PipelineStage = 'uploading' | 'parsing' | 'embedding' | 'analysing' | 'completed' | 'failed';
+
+export interface PipelineStatus {
+  taskId: string;
+  currentStage: PipelineStage;
+  stages: {
+    name: PipelineStage;
+    label: string;
+    status: 'pending' | 'active' | 'completed' | 'failed';
+  }[];
+}

@@ -202,7 +202,8 @@ async def analyze_resume_with_rag(
             HumanMessage(content=user_prompt),
         ]
 
-        analysis: ResumeAnalysis = await chain.ainvoke(messages)
+        import asyncio
+        analysis: ResumeAnalysis = await asyncio.to_thread(chain.invoke, messages)
         result = analysis.model_dump()
 
         # Serialise section_feedback to list[dict] for JSON column storage

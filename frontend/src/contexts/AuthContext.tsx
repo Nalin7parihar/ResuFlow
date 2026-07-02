@@ -1,49 +1,83 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import type { User, AuthContextType } from '../types';
+import { authApi, ApiError } from '../services/api';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// ── Dummy user for development ──────────────────────────────
-const DUMMY_USER: User = {
-  id: '42b8ef1f-6de3-4b33-b567-1b1200bdb526',
-  email: 'demo@resuflow.dev',
-  created_at: '2026-06-15T10:30:00Z',
-};
-
-const DUMMY_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0MmI4ZWYxZi02ZGUzLTRiMzMtYjU2Ny0xYjEyMDBiZGI1MjYiLCJleHAiOjk5OTk5OTk5OTl9.dummy';
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('resuflow_user');
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(() => {
     return localStorage.getItem('resuflow_token');
   });
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true); // true on mount to validate stored token
 
-  const login = useCallback(async (_email: string, _password: string) => {
-    setIsLoading(true);
-    // TODO: Replace with actual API call
-    // const res = await fetch('/api/v1/auth/login', { ... });
-    await new Promise((r) => setTimeout(r, 800)); // simulate network delay
-    setUser(DUMMY_USER);
-    setToken(DUMMY_TOKEN);
-    localStorage.setItem('resuflow_user', JSON.stringify(DUMMY_USER));
-    localStorage.setItem('resuflow_token', DUMMY_TOKEN);
-    setIsLoading(false);
+  // ── Validate stored token on mount ────────────────────────
+  useEffect(() => {
+    const storedToken = localStorage.getItem('resuflow_token');
+    if (!storedToken) {
+      setIsLoading(false);
+      return;
+    }
+
+    authApi
+      .getMe()
+      .then((userData) => {
+        setUser(userData);
+        setToken(storedToken);
+      })
+      .catch(() => {
+        // Token expired or invalid — clear everything
+        localStorage.removeItem('resuflow_token');
+        localStorage.removeItem('resuflow_user');
+        setToken(null);
+        setUser(null);
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
-  const signup = useCallback(async (_email: string, _password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     setIsLoading(true);
-    // TODO: Replace with actual API call
-    // const res = await fetch('/api/v1/auth/register', { ... });
-    await new Promise((r) => setTimeout(r, 1000)); // simulate network delay
-    setUser(DUMMY_USER);
-    setToken(DUMMY_TOKEN);
-    localStorage.setItem('resuflow_user', JSON.stringify(DUMMY_USER));
-    localStorage.setItem('resuflow_token', DUMMY_TOKEN);
-    setIsLoading(false);
+    try {
+      const tokenResponse = await authApi.login(email, password);
+      localStorage.setItem('resuflow_token', tokenResponse.access_token);
+      setToken(tokenResponse.access_token);
+
+      const userData = await authApi.getMe();
+      setUser(userData);
+      localStorage.setItem('resuflow_user', JSON.stringify(userData));
+    } catch (err) {
+      // Clear any partial state
+      localStorage.removeItem('resuflow_token');
+      localStorage.removeItem('resuflow_user');
+      setToken(null);
+      setUser(null);
+      throw err instanceof ApiError ? err : new Error('Login failed');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const signup = useCallback(async (email: string, password: string) => {
+    setIsLoading(true);
+    try {
+      await authApi.register(email, password);
+      // Auto-login after successful registration
+      const tokenResponse = await authApi.login(email, password);
+      localStorage.setItem('resuflow_token', tokenResponse.access_token);
+      setToken(tokenResponse.access_token);
+
+      const userData = await authApi.getMe();
+      setUser(userData);
+      localStorage.setItem('resuflow_user', JSON.stringify(userData));
+    } catch (err) {
+      localStorage.removeItem('resuflow_token');
+      localStorage.removeItem('resuflow_user');
+      setToken(null);
+      setUser(null);
+      throw err instanceof ApiError ? err : new Error('Registration failed');
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
   const logout = useCallback(() => {

@@ -29,8 +29,8 @@ export default function Signup() {
     try {
       await signup(email, password);
       navigate('/dashboard');
-    } catch {
-      setError('Registration failed. Please try again.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Registration failed. Please try again.');
     }
   };
 
